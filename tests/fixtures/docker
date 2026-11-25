@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -eu
+
+printf '%s\n' "${0##*/}" >> "$TRACE_FILE"
+printf '%s\0' "$@" > "$ARGS_FILE"
+printf '%s' "${USER-}" > "$HOST_USER_FILE"
+
+if [[ ${0##*/} == docker ]]; then
+    [[ $1 == compose ]] || exit 90
+    shift
+    if [[ $1 == version ]]; then
+        exit "${COMPOSE_VERSION_STATUS:-0}"
+    fi
+fi
+
+case "$1" in
+    ps)
+        [[ ${PS_STATUS:-0} == 0 ]] || exit "$PS_STATUS"
+        [[ ${SERVICE_RUNNING:-1} == 0 ]] || printf '%s\n' container-id
+        ;;
+    up)
+        exit "${TOOL_STATUS:-0}"
+        ;;
+    exec)
+        if [[ ${RUN_CONTAINER:-0} == 1 ]]; then
+            shift
+            while [[ $1 == -u || $1 == -T ]]; do
+                if [[ $1 == -u ]]; then shift; fi
+                shift
+            done
+            service=$1
+            shift
+            # Simulate the working directory provided by the container runtime.
+            cd "${CONTAINER_WORKDIR:-$PWD}"
+            if [[ -n ${CONTAINER_BIN_ROOT:-} ]]; then
+                export PATH="$CONTAINER_BIN_ROOT/$service"
+            fi
+            exec "$@"
+        fi
+        exit "${TOOL_STATUS:-0}"
+        ;;
+    *) exit 91 ;;
+esac

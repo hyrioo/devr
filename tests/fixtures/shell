@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+# Run the real detection command, then record the shell it selects.
+if [ "${1-}" = -c ]; then
+    exec /bin/sh "$@"
+fi
+printf '%s' "${0##*/}" > "$SHELL_CHOICE_FILE"
+exit "${SHELL_STATUS:-0}"

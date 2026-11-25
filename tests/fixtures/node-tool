@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -eu
+printf '%s' "$PWD" > "$NODE_DIR_FILE"
+printf '%s\0' "$@" > "$NODE_ARGS_FILE"
+exit "${TOOL_STATUS:-0}"

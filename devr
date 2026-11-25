@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    printf '%s\n' 'devr must be executed, not sourced.' >&2
+    return 1
+fi
+
+set -e
+
+if [ $# -eq 0 ] || [ "$1" = -h ] || [ "$1" = --help ]; then
+    printf '%s\n' \
+        'Usage: devr {up|artisan|composer|php|shell|yarn|npm} [args...]' \
+        '' \
+        '  up        Start Compose services in the background' \
+        '  artisan   Run php artisan in the PHP service' \
+        '  composer  Run Composer in the PHP service' \
+        '  php       Run PHP in the PHP service' \
+        '  shell [service]  Open Bash or sh in a service (default: SHELL_DEFAULT_SERVICE)' \
+        '  yarn      Run Yarn in the Node service' \
+        '  npm       Run npm in the Node service' \
+        '' \
+        '  -h, --help  Show this help without loading project configuration'
+    exit 0
+fi
+
+load_project_config() {
+    local config_dir="$PWD" setting
+    local overrides=()
+
+    # Preserve explicit settings so the environment takes priority over .devrrc.
+    for setting in PHP_SERVICE NODE_SERVICE CONTAINER_USER SHELL_DEFAULT_SERVICE SHELL_EXECUTABLE; do
+        if [ "${!setting+x}" = x ]; then
+            overrides+=("$setting=${!setting}")
+        fi
+    done
+
+    while :; do
+        if [ -f "$config_dir/.devrrc" ]; then
+            # .devrrc is trusted shell configuration.
+            # shellcheck source=/dev/null
+            source "$config_dir/.devrrc"
+            break
+        fi
+        [ "$config_dir" = / ] && break
+        config_dir="${config_dir%/*}"
+        config_dir="${config_dir:-/}"
+    done
+
+    for setting in "${overrides[@]}"; do
+        printf -v "${setting%%=*}" '%s' "${setting#*=}"
+    done
+}
+
+load_project_config
+
+PHP_SERVICE="${PHP_SERVICE:-php}"
+NODE_SERVICE="${NODE_SERVICE:-node}"
+CONTAINER_USER="${CONTAINER_USER:-1000}"
+SHELL_DEFAULT_SERVICE="${SHELL_DEFAULT_SERVICE:-$PHP_SERVICE}"
+SHELL_EXECUTABLE="${SHELL_EXECUTABLE:-auto}"
+
+COMMAND="$1"
+shift
+
+TTY_ARGS=()
+[ ! -t 0 ] && TTY_ARGS+=(-T)
+
+case "$COMMAND" in
+    up)
+        ;;
+
+    artisan)
+        SERVICE="$PHP_SERVICE"
+        CMD=(php artisan "$@")
+        ;;
+
+    composer)
+        SERVICE="$PHP_SERVICE"
+        CMD=(composer "$@")
+        ;;
+
+    php)
+        SERVICE="$PHP_SERVICE"
+        CMD=(php "$@")
+        ;;
+
+    shell)
+        if [ $# -gt 1 ]; then
+            echo 'Usage: devr shell [service]' >&2
+            exit 1
+        fi
+        SERVICE="${1:-$SHELL_DEFAULT_SERVICE}"
+        if [ "$SHELL_EXECUTABLE" = auto ]; then
+            CMD=(sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi')
+        else
+            CMD=("$SHELL_EXECUTABLE")
+        fi
+        ;;
+
+    yarn|npm)
+        SERVICE="$NODE_SERVICE"
+        CMD=("$COMMAND" "$@")
+        ;;
+
+    *)
+        echo "Unknown command: $COMMAND" >&2
+        echo "Supported: up, artisan, composer, php, shell, yarn, npm" >&2
+        exit 1
+        ;;
+esac
+
+if command -v docker >/dev/null 2>&1 && docker compose version &>/dev/null; then
+    DOCKER_COMPOSE=(docker compose)
+elif command -v docker-compose >/dev/null 2>&1; then
+    DOCKER_COMPOSE=(docker-compose)
+else
+    echo "Docker Compose is required. Install the Docker Compose plugin or docker-compose." >&2
+    exit 1
+fi
+
+if [ "$COMMAND" = up ]; then
+    exec "${DOCKER_COMPOSE[@]}" up -d "$@"
+fi
+
+# Ensure target service is running
+SERVICE_ID=$("${DOCKER_COMPOSE[@]}" ps -q "$SERVICE") || exit $?
+if [ -z "$SERVICE_ID" ]; then
+    echo "Docker service '$SERVICE' is not running." >&2
+    echo "Run: devr up" >&2
+    exit 1
+fi
+
+exec "${DOCKER_COMPOSE[@]}" exec \
+    -u "$CONTAINER_USER" \
+    "${TTY_ARGS[@]}" \
+    "$SERVICE" \
+    "${CMD[@]}"
